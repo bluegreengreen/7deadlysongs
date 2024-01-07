@@ -261,16 +261,21 @@ def main():
     IDs = []
     initialPoints = []
 
+    if not clientID or not clientSecret or not redirectURI:
+        print("ERROR: You need to fill in your app details in the 'clientID', 'clientSecret' and 'redirectURI' variables.")
+        return
+
     print("Connecting to Spotify...")
 
     scope = "playlist-read-private playlist-modify-private"
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope,
-                                                   client_id=clientID,
-                                                   client_secret=clientSecret,
-                                                   redirect_uri=redirectURI))
+                                                    client_id=clientID,
+                                                    client_secret=clientSecret,
+                                                    redirect_uri=redirectURI))
 
     playlist = input("Paste the URL of your playlist: ")
 
+    print("Retrieving your playlist...")
     try:
         results = sp.playlist_items(playlist)
     except spotipy.exceptions.SpotifyException:
@@ -283,12 +288,22 @@ def main():
         results = sp.next(results)
         allItems.extend(results["items"])
 
+    print("Retrieving information about your tracks...")
     for item in allItems:
         track = item["track"]
-        IDs.append(track["id"])
-        initialPoints.append(DataPoint(track["id"], track["name"], track["artists"][0]["name"], track["explicit"],
-                                       track["album"]["release_date"]))
+        if track["track"]:
+            if track["id"] in IDs:
+                print(f"'{track['name']}' is already in your playlist, and is hence skipped.")
+                continue
+            IDs.append(track["id"])
+            initialPoints.append(DataPoint(track["id"], track["name"], track["artists"][0]["name"], track["explicit"],
+                                        track["album"]["release_date"]))
+        else:
+            # this happens for podcasts, for example
+            print(f"'{track['name']}' is not seen as a track by spotify, and is hence skipped.")
 
+
+    print("Retrieving audio features...")
     # audio features can only be acquired in batches of 100
     audioFeatures = []
     start = 0
@@ -299,10 +314,17 @@ def main():
         end += 100
         audioFeatures = audioFeatures + sp.audio_features(IDsSlice)
 
-    for count, item in enumerate(audioFeatures):
-        initialPoints[count].addFeatures(item["acousticness"], item["danceability"], item["energy"],
-                                         item["instrumentalness"], item["speechiness"], item["tempo"],
-                                         str(item["time_signature"]), item["valence"])
+    count = 0
+    for item in audioFeatures:
+        if item:
+            initialPoints[count].addFeatures(item["acousticness"], item["danceability"], item["energy"],
+                                            item["instrumentalness"], item["speechiness"], item["tempo"],
+                                            str(item["time_signature"]), item["valence"])
+            count += 1
+        else:
+            print(f"Couldn't find audio features for '{initialPoints[count].title}'")
+            initialPoints.pop(count)
+
 
     print("Processing your data...")
     normalise(initialPoints)
@@ -321,11 +343,17 @@ def main():
     kMeans(clustering, passes)
     topPicks = pickBest(clustering)
 
-    newList = sp.user_playlist_create(sp.current_user()["id"], "7 deadly songs!", False, False,
-                                      "A nice little selection of 7 songs to share with your friends.")
-    sp.playlist_add_items(newList["id"], topPicks)
+    new_playlist = input("Would you like to create a new playlist with your 7 deadly songs? (y/n): ")
+    if new_playlist == "y":
+        newList = sp.user_playlist_create(sp.current_user()["id"], "7 deadly songs!", False, False,
+                                        "A nice little selection of 7 songs to share with your friends.")
+        sp.playlist_add_items(newList["id"], topPicks)
 
-    print("Done! You can check out your 7 deadly songs here: " + newList["external_urls"]["spotify"])
+        print("Done! You can check out your 7 deadly songs here: " + newList["external_urls"]["spotify"])
+    else:
+        print("Your 7 deadly songs are: ")
+        for track in topPicks:
+            print(" - " + sp.track(track)["artists"][0]["name"] + ": " + sp.track(track)["name"])
 
     # Un-comment the line below if you want to see all of the tracks in each clustering
     # printClustering(clustering)
